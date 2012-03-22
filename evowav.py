@@ -1,99 +1,111 @@
-# Import scipy audio tools, numpy, and randomization tools
-import scipy
-from scipy.io import wavfile
-
+import random
+import itertools
 import numpy
+import scipy.io.wavfile
 
-from random import shuffle, randint
 
-# Read a wav file data array, detect zero crossings, split at zero crossings, and return a nested list.
-def process_wav(input):
 
-	# Assign the wavefile data array to a variable.
-	wavdata = input[1]
 
-	# Detect zero crossings, i.e. changes in sign in the waveform data. The line below returns an array of the indices of elements after which a zero crossing occurs.
-	zerocrossings = numpy.where(numpy.diff(numpy.sign(wavdata)))[0]
-	# Increment each element in the array by one. Otherwise, the indices are off.
-	zerocrossings = numpy.add(numpy.ones(zerocrossings.size, zerocrossings.dtype), zerocrossings)
-
-	wavdatalist = wavdata.tolist()
-	zerocrossingslist = zerocrossings.tolist()
-
-	# Split the list at zero crossings. The function below splits a list at the given indices.		
-	def partition(alist, indices):
-		return [alist[i:j] for i, j in zip([0]+indices, indices+[None])]
-
-	return partition(wavdatalist, zerocrossingslist)
+def main():
+	"""Read a wav file and shuffle the negative and positive pieces."""
 	
-
-# Accept a list as input, separate into positive and negative chunks, shuffle, and return a shuffled nested list
-def shuffle_wav(list):
-	
-	# Separate waveform chunks into positive and negative lists.
-	positivechunks = []
-	negativechunks = []
-
-	for chunk in list:
-		if chunk[0] < 0:
-			negativechunks.append(chunk)
-		elif chunk[0] > 0:
-			positivechunks.append(chunk)
-		elif chunk[0] == 0:
-			positivechunks.append(chunk)
+	# Unpack sample wav file into a sample rate variable and numpy array
+	samplerate, target_genotype = scipy.io.wavfile.read('target.wav')
 		
-	# Shuffle the chunks and append them to a list, alternating positive with negative.
-	shuffledchunks = []
-	while len(positivechunks) >= 0 and len(negativechunks) > 0:
-		currentpositivechunk = positivechunks.pop(randint(0, len(positivechunks)-1))
-		shuffledchunks.append(currentpositivechunk)
-		currentnegativechunk = negativechunks.pop(randint(0, len(negativechunks)-1))
-		shuffledchunks.append(currentnegativechunk)
-
-	return [chunk for sublist in shuffledchunks for chunk in sublist]
-
-# Generate the 'fitness' of a given individual, defined as the sum of the squared difference between the individual and target array, i.e. a measurement of difference.	
-def get_fitness(individual, target):
-	return numpy.sum(numpy.subtract(individual, target)**2)
+	generation_size = 10
+	population = []
 	
-# Create a new shuffled individual from the target. Returns a numpy array.
-def new_shuffled_individual(target):
-	numpy.random.shuffle(target)
-	flatchunks = [chunk for sublist in target for chunk in sublist]
-	return numpy.array(flatchunks, dtype='int32')
+	for i in range(0, generation_size):
+		genotype = new_shuffled_genotype(target_genotype)
+		fitness = get_fitness(genotype, target_genotype)		
+		individual = {'genotype': genotype, 'fitness': fitness }
+		population.append(individual)
 	
-def replicate(parent1, parent2):
-	spliceindex = randint(0, len(parent1)-1)
-	return parent1[:spliceindex] + parent2[spliceindex:]
-
-# Read a sample wav file. The wavfile function returns a tuple of the file's sample rate and data as a numpy array, to be passed to the process_wav() function.
-input = scipy.io.wavfile.read('sample.wav') 	
-	
-targetchunks = process_wav(input)
-population = []
-
-while len(population) < 20:
-	population.append(new_shuffled_individual(targetchunks))
-
-for individual in population:
-	print get_fitness(individual, input[1])
-
-
-
-
-
-#flatchunks = new_shuffled_individual(wavchunks)
-#output = numpy.array(flatchunks, dtype='int32')
-#print get_fitness(output, input[1])
-
-#scipy.io.wavfile.write('output.wav', 44100, output)
-
-def mutate_chunk(chunk):
-	mutation = randint(0,1)
-	if mutation == 0:
-		chunk.reverse()
-	else:
-		for item in chunk:
-			item = randint(-500, 500) + item
+	generation = 0
 			
-	return chunk
+	while True:
+		population.sort(key=lambda individual: individual['fitness'])
+		
+		if population[0]['fitness'] == 0:
+			output = population[0]['genotype']
+			scipy.io.wavfile.write('output.wav', 44100, output)
+			break
+		
+		p1 = population[0]['genotype']
+		p2 = population[1]['genotype']
+		child_genotype = mate(p1, p2)
+		child_fitness = get_fitness(child_genotype, target_genotype)
+		if child_fitness < population[-1]['fitness']:
+			population[-1] = {'genotype': child_genotype, 'fitness': child_fitness}
+		
+		mutated_genotype, mutantindex = mutate(population)
+		mutated_fitness = get_fitness(mutated_genotype, target_genotype)
+		population[mutantindex] = {'genotype': mutated_genotype, 'fitness': mutated_fitness}
+		
+	 	print generation, population[0]['fitness']
+	 	
+	 	if generation % 500 == 0:
+	 		output = population[0]['genotype']
+			scipy.io.wavfile.write('output.wav', 44100, output)
+	 	
+	 	generation += 1
+	
+	#output = new_shuffled_individual(target)
+	#print get_fitness(output, target)
+	#scipy.io.wavfile.write('output.wav', 44100, output)
+
+def process_wav(wavdata):
+	"""Read a wav file data array, detect zero crossings, split at zero crossings, and return a list of numpy arrays"""
+	
+	zerocrossings, = numpy.diff(numpy.sign(wavdata)).nonzero()
+	zerocrossings += 1
+	indices = [0] + zerocrossings.tolist() + [None]
+	
+	return [wavdata[i:j] for i, j in zip(indices[:-1], indices[1:])]
+
+def shuffle_wav(partitions):
+	"""Accept a list as input, separate into positive and negative chunks, shuffle, and return a shuffled nested list."""
+	
+	# Separate into positive and negative chunks
+	poschunks = partitions[::2]
+	negchunks = partitions[1::2]
+	if poschunks[0][0] < 0:
+		# Reverse the variable names if the first chunk isn't positive.
+		negchunks, poschunks = poschunks, negchunks
+	
+	# Shuffle the lists
+	random.shuffle(poschunks)
+	random.shuffle(negchunks)
+	
+	# Zip the lists back together
+	chunks = itertools.izip_longest(poschunks, negchunks, fillvalue=[])
+	
+	return numpy.hstack(item for sublist in chunks for item in sublist)
+
+def get_fitness(individual_genotype, target_genotype):
+	"""Compares sum of square differences between the two arrays."""
+	return ((individual_genotype - target_genotype)**2).sum()
+
+def new_shuffled_genotype(target_genotype):
+	"""Creates a new shuffled individual from the target array. Returns a numpy array."""
+	wavchunks = process_wav(target_genotype)
+	return shuffle_wav(wavchunks).astype(numpy.int16)
+	
+def mate(parent1, parent2):
+	spliceindex = random.randint(0, len(parent1)-1)
+	return numpy.hstack((parent1[:spliceindex], parent2[spliceindex:]))
+
+def mutate(population):
+	i = random.randint(0, len(population)-1)
+	mutation_target = population[i]
+	mutation_genotype = mutation_target['genotype']
+	processed_genotype = process_wav(mutation_genotype)
+	j = random.randint(0, len(processed_genotype))
+	k = random.randint(1, len(processed_genotype)-1)
+	random.shuffle(mutation_genotype[j:k])
+	shuffled_genotype = mutation_genotype
+	return shuffled_genotype, i
+			
+
+main()
+	
