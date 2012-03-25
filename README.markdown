@@ -1,0 +1,1 @@
+This was an attempt to use an evolutionary algorithm to "evolve" a given .wav file. It uses [SciPy](http://www.scipy.org/), but doesn't work very well. Some day I might try to fix it.
